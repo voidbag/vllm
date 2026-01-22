@@ -97,6 +97,7 @@ class MMEncoderAttention(CustomOp):
         bsz: int,
         q_len: int,
         kv_len: int,
+        use_virtual_head: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Reshape query, key, value to 4D tensors:
@@ -106,7 +107,7 @@ class MMEncoderAttention(CustomOp):
         key = key.view(bsz, kv_len, self.num_kv_heads, self.head_size)
         value = value.view(bsz, kv_len, self.num_kv_heads, self.head_size)
 
-        if (num_repeat := self.num_queries_per_kv) > 1:
+        if (num_repeat := self.num_queries_per_kv) > 1 and not use_virtual_head:
             # Handle MQA and GQA
             key = torch.repeat_interleave(key, num_repeat, dim=2)
             value = torch.repeat_interleave(value, num_repeat, dim=2)
@@ -128,8 +129,10 @@ class MMEncoderAttention(CustomOp):
         kv_len = key.size(1)
         is_reshaped = query.dim() != 4
 
+        enable_gqa = self.num_heads > self.num_kv_heads
+
         query, key, value = self.maybe_reshape_qkv_to_4d(
-            query, key, value, bsz, q_len, kv_len
+            query, key, value, bsz, q_len, kv_len, use_virtual_head=enable_gqa,
         )
 
         output = vit_torch_sdpa_wrapper(
@@ -138,6 +141,7 @@ class MMEncoderAttention(CustomOp):
             v=value,
             scale=self.scale,
             cu_seqlens=cu_seqlens,
+            enable_gqa=enable_gqa,
         )
         if is_reshaped:
             output = output.reshape(bsz, q_len, -1)
